@@ -28,7 +28,7 @@
         public double total_elevation_gain { get; set; }
         public string type { get; set; }
         public string sport_type { get; set; }
-        public int workout_type { get; set; }
+        public int? workout_type { get; set; }
         public long id { get; set; }
         public string start_date { get; set; }
         public string start_date_local { get; set; }

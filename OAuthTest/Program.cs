@@ -1,11 +1,8 @@
 ﻿using Microsoft.AspNetCore.Authentication;
-using Microsoft.AspNetCore.Authentication.Cookies;
-using Microsoft.AspNetCore.Authentication.OAuth;
-using OAuthTest;
+using OAuthTest.Extensions;
 using OAuthTest.Models;
 using System.Net.Http.Headers;
-using System.Security.Claims;
-using System.Text.Json;
+using System.Text;
 
 
 internal class Program
@@ -14,84 +11,8 @@ internal class Program
     {
         var builder = WebApplication.CreateBuilder();
 
-        OAuthCreatingTicketContext contextData = null;
-
-        //builder.AuthenticateStrava();
-
-        builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
-            .AddCookie(CookieAuthenticationDefaults.AuthenticationScheme)
-            .AddOAuth("strava", option =>
-            {
-                option.SignInScheme = CookieAuthenticationDefaults.AuthenticationScheme;
-
-                option.ClientId = Config.ClientId;
-                option.ClientSecret = Config.ClientSecret;
-
-                option.Scope.Add("activity:read_all");
-                option.AuthorizationEndpoint = "http://www.strava.com/oauth/authorize";
-                option.TokenEndpoint = "https://www.strava.com/oauth/token";
-                option.CallbackPath = "/strava-cb";
-                option.UserInformationEndpoint = "https://www.strava.com/api/v3/athlete";
-
-                option.SaveTokens = true;
-
-                option.ClaimActions.MapJsonKey("sub", "id");
-                option.ClaimActions.MapJsonKey(ClaimTypes.Name, "login");
-
-                //option.ClaimActions.MapJsonKey("Id", "id");
-                //option.ClaimActions.MapJsonKey("Firstname", "firstname");
-                //option.ClaimActions.MapJsonKey("Lastname", "lastname");
-
-                option.Events.OnCreatingTicket = ctx => { return GetUserInfo(ctx); };
-                //option.Events. = new OAuthEvents
-                //{
-                //    OnMessageReceived = ctx =>
-                //    {
-                //        ctx.Token = ctx.Request.Query["access_token"];
-                //        return Task.CompletedTask;
-                //    }
-                //};
-            });
-
-        async Task GetUserInfo(OAuthCreatingTicketContext ctx)
-        {
-            using var request = new HttpRequestMessage(HttpMethod.Get, ctx.Options.UserInformationEndpoint);
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", ctx.AccessToken);
-            using var result = await ctx.Backchannel.SendAsync(request);
-            var user = await result.Content.ReadFromJsonAsync<JsonElement>();
-            ctx.RunClaimActions(user);
-
-            contextData = ctx;
-        }
-
-        //builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
-        //    .AddCookie(CookieAuthenticationDefaults.AuthenticationScheme)
-        //    .AddOAuth("github", option =>
-        //    {
-        //        option.SignInScheme = CookieAuthenticationDefaults.AuthenticationScheme;
-        //        option.ClientId = "Ov23liH4NqcEN5ij43L0";
-        //        option.ClientSecret = "a207807e01bbca5cef1ea090000c700f897caea2";
-
-        //        option.AuthorizationEndpoint = "https://github.com/login/oauth/authorize";
-        //        option.TokenEndpoint = "https://github.com/login/oauth/access_token";
-        //        option.CallbackPath = "/oauth/github-cb";
-
-        //        option.SaveTokens = true;
-
-        //        option.UserInformationEndpoint = "https://api.github.com/user";
-
-        //        //option.ClaimActions.MapJsonKey("sub", "id");
-        //        //option.ClaimActions.MapJsonKey(ClaimTypes.Name, "login");
-
-        //        //option.Events.OnCreatingTicket = async ctx =>
-        //        //{
-        //        //    using var request = new HttpRequestMessage(HttpMethod.Get, ctx.Options.UserInformationEndpoint);
-        //        //    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", ctx.AccessToken);
-        //        //    using var result = await ctx.Backchannel.SendAsync(request);
-        //        //    var user = await result.Content.ReadFromJsonAsync<JsonElement>();
-        //        //    ctx.RunClaimActions(user);
-        //        //};
-        //    });
+        builder.Services.AddHttpClient();
+        builder.AuthenticateStrava();
 
         var app = builder.Build();
 
@@ -106,28 +27,46 @@ internal class Program
         app.MapGet("/login", () =>
         {
             return Results.Challenge(
-                new AuthenticationProperties() { RedirectUri = "https://localhost:5005/" },
-                authenticationSchemes: new List<string>() { "strava" });
-                //authenticationSchemes: new List<string>() { "github" });
+                new AuthenticationProperties() { 
+                    RedirectUri = "https://localhost:5005/" }, 
+                    authenticationSchemes: new List<string>() { "strava" });
+
+            //authenticationSchemes: new List<string>() { "github" });
         });
 
-        app.MapGet("/getroutes", async () =>
-        {
-            var list = await GetRoutes();
+        //app.Map("/strava-cb", () => Results.Redirect("/"));
 
-            return list.Select(x => x.name);
-        });
-
-        async Task<List<Activity>> GetRoutes()
+        app.MapGet("/getroutes", async (HttpContext ctx, IHttpClientFactory factory) =>
         {
-            if (contextData == null)
+            var list = await GetRoutes(ctx, factory);
+
+            var orderedList = list.OrderBy(x => x.name);
+
+            var sb = new StringBuilder();
+
+            foreach (var item in orderedList)
             {
-                return new List<Activity>();
+                sb.AppendLine(item.name + "\n");
             }
 
-            using var request = new HttpRequestMessage(HttpMethod.Get, "https://www.strava.com/api/v3/athlete/activities?page=1&per_page=2");
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", contextData.AccessToken);
-            using var result = await contextData.Backchannel.SendAsync(request);
+            return sb.ToString();
+        });
+
+        async Task<List<Activity>> GetRoutes(HttpContext ctx, IHttpClientFactory factory)
+        {
+            var token = ctx.GetTokenAsync("access_token").Result;
+
+            using var request = new HttpRequestMessage(HttpMethod.Get, "https://www.strava.com/api/v3/athlete/activities?page=1&per_page=40");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+            using var result = factory.CreateClient().SendAsync(request).Result;
+
+            if (!result.IsSuccessStatusCode)
+            {
+                throw new Exception("Error");
+            }
+
+            var resultString = await result.Content.ReadAsStringAsync();
 
             var data = await result.Content.ReadFromJsonAsync<List<Activity>>();
 
